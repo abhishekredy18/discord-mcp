@@ -643,6 +643,11 @@ mcp.tool(
     url: z.string().describe("Attachment URL from a message"),
   },
   async ({ url }) => {
+    const parsed = new URL(url);
+    const allowedHosts = ["cdn.discordapp.com", "media.discordapp.net"];
+    if (!allowedHosts.includes(parsed.hostname) || parsed.protocol !== "https:") {
+      return err("Only Discord HTTPS attachment URLs are allowed");
+    }
     const resp = await fetch(url);
     if (!resp.ok) return err(`Download failed: ${resp.status} ${resp.statusText}`);
     const text = await resp.text();
