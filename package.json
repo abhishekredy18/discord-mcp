@@ -1,0 +1,28 @@
+{
+  "name": "discord-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Discord — full guild access via bot token",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "discord-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "discord.js": "^14.18.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
