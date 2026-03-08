@@ -259,6 +259,19 @@ tests/
 └── formatters.test.ts    # Formatter unit tests
 ```
 
+## Contributing with Claude Code
+
+This repo ships a `.claude/` directory with project rules, prompts, and skills that help Claude Code understand the codebase and follow project conventions. If you use [Claude Code](https://claude.com/claude-code), it will automatically pick these up.
+
+What's included:
+
+- **`.claude/CLAUDE.md`** — Project instructions, key files, constraints, and definition of done
+- **`.claude/rules/`** — Delivery workflow, expansion roadmap, security review runbook
+- **`.claude/prompts/`** — Ready-made prompt templates for bug fixes, refactors, and reviews
+- **`.claude/skills/`** — `/discord-mcp-build` and `/discord-mcp-verify` slash commands
+
+Contributions are welcome — whether it's new tools, better prompts, or improved rules. Open an issue or PR and feel free to improve the `.claude/` config alongside your code changes.
+
 ## License
 
 MIT
