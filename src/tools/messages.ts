@@ -1,9 +1,10 @@
-import { MessageFlags, type Message } from "discord.js";
+import { AttachmentBuilder, MessageFlags, type Message } from "discord.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { DiscordActionContext } from "../discord/context.js";
 import { fmtMessage } from "../discord/formatters.js";
 import { ok, err } from "../mcp/response.js";
+import { isAllowedAttachmentUrl } from "./attachments.js";
 
 /* ── Shared schemas ──────────────────────────────────────────── */
 
@@ -69,6 +70,52 @@ const allowedMentionsSchema = z
   .describe(
     "Mention controls (default: @everyone/@here suppressed for safety)"
   );
+
+/* ── File attachment schema (shared with threads.ts) ───────────── */
+
+export const fileAttachmentSchema = z.object({
+  name: z
+    .string()
+    .describe("Filename with extension (e.g. 'report.pdf')"),
+  content_base64: z
+    .string()
+    .describe("File content as base64-encoded string"),
+  description: z
+    .string()
+    .optional()
+    .describe("Alt text / description for the attachment"),
+});
+
+/** Sanitize filename: strip path separators to prevent path traversal. */
+function sanitizeFilename(name: string): string {
+  return name.replace(/[/\\]/g, "_");
+}
+
+/** Convert file attachment params to discord.js AttachmentBuilder instances. */
+function buildAttachments(
+  files: { name: string; content_base64: string; description?: string }[]
+): AttachmentBuilder[] {
+  return files.map((f) => {
+    const buf = Buffer.from(f.content_base64, "base64");
+    const safeName = sanitizeFilename(f.name);
+    return new AttachmentBuilder(buf, {
+      name: safeName,
+      description: f.description,
+    });
+  });
+}
+
+/** Format attachment metadata from a sent Discord message. */
+function fmtAttachmentMeta(msg: Message) {
+  if (!msg.attachments.size) return undefined;
+  return [...msg.attachments.values()].map((a) => ({
+    id: a.id,
+    name: a.name,
+    url: a.url,
+    size: a.size,
+    content_type: a.contentType,
+  }));
+}
 
 /* ── Mention-safe default ─────────────────────────────────────── */
 
@@ -255,14 +302,14 @@ export function registerMessageTools(
 
   mcp.tool(
     "discord_send_message",
-    "Send a message to a channel. Supports text, embeds, and mention controls. " +
+    "Send a message to a channel. Supports text, embeds, file attachments, and mention controls. " +
       "By default @everyone/@here mentions are suppressed for safety.",
     {
       channel: z.string().describe("Channel name or ID"),
       content: z
         .string()
         .optional()
-        .describe("Message text (required if no embeds)"),
+        .describe("Message text (required if no embeds or files)"),
       reply_to: z
         .string()
         .optional()
@@ -272,6 +319,11 @@ export function registerMessageTools(
         .max(10)
         .optional()
         .describe("Rich embeds (max 10)"),
+      files: z
+        .array(fileAttachmentSchema)
+        .max(10)
+        .optional()
+        .describe("File attachments (max 10). Each file needs name and base64-encoded content."),
       allowed_mentions: allowedMentionsSchema,
       suppress_embeds: z
         .boolean()
@@ -287,13 +339,18 @@ export function registerMessageTools(
       content,
       reply_to,
       embeds,
+      files,
       allowed_mentions,
       suppress_embeds,
       suppress_notifications,
     }) => {
-      if (!content && (!embeds || embeds.length === 0)) {
+      if (
+        !content &&
+        (!embeds || embeds.length === 0) &&
+        (!files || files.length === 0)
+      ) {
         return err(
-          "Provide content or at least one embed",
+          "Provide content, at least one embed, or at least one file",
           "INVALID_INPUT"
         );
       }
@@ -308,16 +365,26 @@ export function registerMessageTools(
       if (suppress_notifications)
         flagsList.push(MessageFlags.SuppressNotifications as number);
 
+      const builtFiles = files?.length ? buildAttachments(files) : undefined;
+
       const msg = await ch.send({
         ...(content ? { content } : {}),
         ...(embeds?.length ? { embeds } : {}),
+        ...(builtFiles ? { files: builtFiles } : {}),
         allowedMentions: safeMentions(allowed_mentions),
         ...(reply_to
           ? { reply: { messageReference: reply_to } }
           : {}),
         ...(flagsList.length ? { flags: flagsList } : {}),
       });
-      return ok({ sent: true, id: msg.id, channel: ch.name });
+
+      const attachments = fmtAttachmentMeta(msg);
+      return ok({
+        sent: true,
+        id: msg.id,
+        channel: ch.name,
+        ...(attachments ? { attachments } : {}),
+      });
     }
   );
 
@@ -510,6 +577,87 @@ export function registerMessageTools(
         crossposted: true,
         id: published.id,
         channel: ch.name,
+      });
+    }
+  );
+
+  /* ─── forward_message ────────────────────────────────────────────── */
+
+  mcp.tool(
+    "discord_forward_message",
+    "Forward a message (text + embeds + attachments) from one channel to another within " +
+      "Discord. Downloads and re-uploads attachments server-side — no base64 round-trip " +
+      "through the context window.",
+    {
+      source_channel: z
+        .string()
+        .describe("Source channel name or ID"),
+      message_id: z
+        .string()
+        .describe("ID of the message to forward"),
+      target_channel: z
+        .string()
+        .describe("Destination channel name or ID"),
+      comment: z
+        .string()
+        .optional()
+        .describe("Optional comment prepended to the forwarded content"),
+    },
+    async ({ source_channel, message_id, target_channel, comment }) => {
+      const g = ctx.getGuild();
+      await g.channels.fetch();
+      const srcCh = ctx.getTextChannel(g, source_channel);
+      const dstCh = ctx.getTextChannel(g, target_channel);
+      const srcMsg = await srcCh.messages.fetch(message_id);
+
+      // Build forwarded content
+      const parts: string[] = [];
+      if (comment) parts.push(comment);
+
+      const author =
+        srcMsg.member?.displayName ??
+        srcMsg.author.displayName ??
+        srcMsg.author.username;
+      parts.push(
+        `> **${author}** in #${srcCh.name} (${srcMsg.createdAt.toISOString()}):`
+      );
+      if (srcMsg.content) parts.push(`> ${srcMsg.content.replace(/\n/g, "\n> ")}`);
+
+      const forwardedContent = parts.join("\n");
+
+      // Re-download attachments from CDN and build AttachmentBuilders
+      const reuploadFiles: AttachmentBuilder[] = [];
+      for (const att of srcMsg.attachments.values()) {
+        if (!isAllowedAttachmentUrl(att.url)) continue;
+        const resp = await fetch(att.url);
+        if (!resp.ok) continue;
+        const buf = Buffer.from(await resp.arrayBuffer());
+        reuploadFiles.push(
+          new AttachmentBuilder(buf, {
+            name: sanitizeFilename(att.name),
+            description: att.description ?? undefined,
+          })
+        );
+      }
+
+      // Forward embeds from the original message
+      const forwardedEmbeds = srcMsg.embeds.map((e) => e.toJSON());
+
+      const sent = await dstCh.send({
+        content: forwardedContent,
+        ...(forwardedEmbeds.length ? { embeds: forwardedEmbeds } : {}),
+        ...(reuploadFiles.length ? { files: reuploadFiles } : {}),
+        allowedMentions: safeMentions(),
+      });
+
+      const attachments = fmtAttachmentMeta(sent);
+      return ok({
+        forwarded: true,
+        id: sent.id,
+        source_channel: srcCh.name,
+        source_message_id: srcMsg.id,
+        target_channel: dstCh.name,
+        ...(attachments ? { attachments } : {}),
       });
     }
   );

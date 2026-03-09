@@ -26,6 +26,27 @@ export function ok(data: unknown) {
   };
 }
 
+/**
+ * Success response with mixed content (JSON metadata + inline images).
+ * Used when returning image data that Claude can visually inspect.
+ */
+export function okWithImages(
+  data: unknown,
+  images: { base64: string; mimeType: string }[]
+) {
+  const payload: SuccessPayload = { ok: true, details: data };
+  return {
+    content: [
+      { type: "text" as const, text: JSON.stringify(payload, null, 2) },
+      ...images.map((img) => ({
+        type: "image" as const,
+        data: img.base64,
+        mimeType: img.mimeType,
+      })),
+    ],
+  };
+}
+
 export function err(msg: string, code?: string, retry_after_ms?: number) {
   const payload: ErrorPayload = {
     ok: false,

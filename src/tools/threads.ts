@@ -1,4 +1,5 @@
 import {
+  AttachmentBuilder,
   ChannelType,
   ForumLayoutType,
   SortOrderType,
@@ -11,6 +12,7 @@ import { z } from "zod";
 import type { DiscordActionContext } from "../discord/context.js";
 import { fmtThread } from "../discord/formatters.js";
 import { ok, err } from "../mcp/response.js";
+import { fileAttachmentSchema } from "./messages.js";
 
 /* ── Thread resolution helper ──────────────────────────────────── */
 
@@ -158,7 +160,8 @@ export function registerThreadTools(mcp: McpServer, ctx: DiscordActionContext) {
 
   mcp.tool(
     "discord_create_forum_post",
-    "Create a new post in a forum channel. Returns the created thread and starter message.",
+    "Create a new post in a forum channel. Supports file attachments. " +
+      "Returns the created thread and starter message with attachment metadata.",
     {
       channel: z.string().describe("Forum channel name or ID"),
       name: z.string().describe("Post title"),
@@ -167,9 +170,14 @@ export function registerThreadTools(mcp: McpServer, ctx: DiscordActionContext) {
         .array(z.string())
         .optional()
         .describe("Tag names or IDs to apply to the post"),
+      files: z
+        .array(fileAttachmentSchema)
+        .max(10)
+        .optional()
+        .describe("File attachments for the starter message (max 10)"),
       auto_archive_duration: archiveDurationSchema,
     },
-    async ({ channel, name, content, tags, auto_archive_duration }) => {
+    async ({ channel, name, content, tags, files, auto_archive_duration }) => {
       const g = ctx.getGuild();
       await g.channels.fetch();
       const ch = ctx.resolveChannel(g, channel);
@@ -193,9 +201,25 @@ export function registerThreadTools(mcp: McpServer, ctx: DiscordActionContext) {
           .filter(Boolean);
       }
 
+      // Build file attachments
+      let builtFiles: AttachmentBuilder[] | undefined;
+      if (files?.length) {
+        builtFiles = files.map((f) => {
+          const buf = Buffer.from(f.content_base64, "base64");
+          const safeName = f.name.replace(/[/\\]/g, "_");
+          return new AttachmentBuilder(buf, {
+            name: safeName,
+            description: f.description,
+          });
+        });
+      }
+
       const thread = await forum.threads.create({
         name,
-        message: { content },
+        message: {
+          content,
+          ...(builtFiles ? { files: builtFiles } : {}),
+        },
         ...(appliedTags?.length ? { appliedTags } : {}),
         ...(auto_archive_duration
           ? { autoArchiveDuration: parseArchiveDuration(auto_archive_duration) }
@@ -203,6 +227,17 @@ export function registerThreadTools(mcp: McpServer, ctx: DiscordActionContext) {
       });
 
       const starter = await thread.fetchStarterMessage();
+
+      // Format attachment metadata from starter message
+      const attachments = starter?.attachments.size
+        ? [...starter.attachments.values()].map((a) => ({
+            id: a.id,
+            name: a.name,
+            url: a.url,
+            size: a.size,
+            content_type: a.contentType,
+          }))
+        : undefined;
 
       return ok({
         thread: fmtThread(thread),
@@ -212,6 +247,7 @@ export function registerThreadTools(mcp: McpServer, ctx: DiscordActionContext) {
               content: starter.content,
               author: starter.author.username,
               timestamp: starter.createdAt.toISOString(),
+              ...(attachments ? { attachments } : {}),
             }
           : null,
       });
