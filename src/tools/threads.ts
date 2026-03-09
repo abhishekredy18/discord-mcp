@@ -10,7 +10,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { DiscordActionContext } from "../discord/context.js";
-import { fmtThread } from "../discord/formatters.js";
+import { fmtEmbed, fmtThread } from "../discord/formatters.js";
 import { ok, err } from "../mcp/response.js";
 import { fileAttachmentSchema } from "./messages.js";
 
@@ -248,6 +248,9 @@ export function registerThreadTools(mcp: McpServer, ctx: DiscordActionContext) {
               author: starter.author.username,
               timestamp: starter.createdAt.toISOString(),
               ...(attachments ? { attachments } : {}),
+              ...(starter.embeds.length > 0
+                ? { embeds: starter.embeds.map(fmtEmbed) }
+                : {}),
             }
           : null,
       });

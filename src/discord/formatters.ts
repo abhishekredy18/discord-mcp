@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  type Embed,
   type GuildBasedChannel,
   type Message,
   type ThreadChannel,
@@ -46,7 +47,7 @@ function fmtMessage(m: Message) {
           })),
         }
       : {}),
-    ...(m.embeds.length > 0 ? { embeds: m.embeds.length } : {}),
+    ...(m.embeds.length > 0 ? { embeds: m.embeds.map(fmtEmbed) } : {}),
   };
 }
 
@@ -68,4 +69,34 @@ function fmtThread(t: ThreadChannel) {
   };
 }
 
-export { CHANNEL_TYPE_NAMES, fmtChannel, fmtMessage, fmtThread };
+function fmtEmbed(e: Embed) {
+  return {
+    ...(e.title ? { title: e.title } : {}),
+    ...(e.description ? { description: e.description } : {}),
+    ...(e.url ? { url: e.url } : {}),
+    ...(e.color !== null ? { color: e.color } : {}),
+    ...(e.timestamp ? { timestamp: e.timestamp } : {}),
+    ...(e.author
+      ? {
+          author: {
+            name: e.author.name,
+            ...(e.author.url ? { url: e.author.url } : {}),
+          },
+        }
+      : {}),
+    ...(e.footer ? { footer: e.footer.text } : {}),
+    ...(e.image ? { image_url: e.image.url } : {}),
+    ...(e.thumbnail ? { thumbnail_url: e.thumbnail.url } : {}),
+    ...(e.fields?.length > 0
+      ? {
+          fields: e.fields.map((f) => ({
+            name: f.name,
+            value: f.value,
+            ...(f.inline ? { inline: true } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+export { CHANNEL_TYPE_NAMES, fmtChannel, fmtEmbed, fmtMessage, fmtThread };

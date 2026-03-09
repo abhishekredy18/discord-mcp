@@ -122,11 +122,13 @@ describe("fmtMessage()", () => {
     expect(result).not.toHaveProperty("attachments");
   });
 
-  it("includes embed count when present", () => {
+  it("includes full embed content when present", () => {
     const result = fmtMessage(
       mockMessage({ embeds: [{ title: "E1" }, { title: "E2" }] })
     );
-    expect(result.embeds).toBe(2);
+    expect(result.embeds).toHaveLength(2);
+    expect(result.embeds![0]).toEqual({ title: "E1" });
+    expect(result.embeds![1]).toEqual({ title: "E2" });
   });
 
   it("omits embeds when empty", () => {
